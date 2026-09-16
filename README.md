@@ -1,108 +1,78 @@
-# OuterTune
+# BIMO
 
-<img src="./assets/outertune.webp" height="88" alt="OuterTune app icon">
+A personal music player for Android, customized and maintained by **Rana**.
 
-A Material 3 YouTube Music client & local music player for Android
+## About
 
-[![Latest release](https://img.shields.io/github/v/release/OuterTune/OuterTune?include_prereleases)](https://github.com/OuterTune/OuterTune/releases)
-[![License](https://img.shields.io/github/license/OuterTune/OuterTune)](https://www.gnu.org/licenses/gpl-3.0)
-[![Downloads](https://img.shields.io/github/downloads/OuterTune/OuterTune/total)](https://github.com/OuterTune/OuterTune/releases)
+BIMO is a personal customized fork of [OuterTune](https://github.com/OuterTune/OuterTune), which itself is a fork of [InnerTune](https://github.com/z-huang/InnerTune). I customized this project for my own personal use, including UI changes, branding, configuration, and additional improvements.
 
-
-<!-- use  "⠀⠀" for spacing -->
-[<img src="assets/badge_github.png" alt="Get it on GitHub" height="40">](https://github.com/OuterTune/OuterTune/releases/latest)⠀⠀
-[<img src="assets/IzzyOnDroidButtonGreyBorder.svg" alt="Get it on IzzyOnDroid" height="40">](https://apt.izzysoft.de/fdroid/index/apk/com.dd3boh.outertune)⠀⠀
-[<img src="assets/badge_obtainium.png" alt="Get it on Obtainium" height="40">](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.dd3boh.outertune%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FDD3Boh%2FOuterTune%22%2C%22author%22%3A%22DD3Boh%22%2C%22name%22%3A%22OuterTune%22%2C%22preferredApkIndex%22%3A0%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Afalse%2C%5C%22fallbackToOlderReleases%5C%22%3Atrue%2C%5C%22filterReleaseTitlesByRegEx%5C%22%3A%5C%22%5C%22%2C%5C%22filterReleaseNotesByRegEx%5C%22%3A%5C%22%5C%22%2C%5C%22verifyLatestTag%5C%22%3Afalse%2C%5C%22dontSortReleasesList%5C%22%3Afalse%2C%5C%22useLatestAssetDateAsReleaseDate%5C%22%3Afalse%2C%5C%22trackOnly%5C%22%3Afalse%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22%5C%22%2C%5C%22matchGroupToUse%5C%22%3A%5C%22%5C%22%2C%5C%22versionDetection%5C%22%3Atrue%2C%5C%22releaseDateAsVersion%5C%22%3Afalse%2C%5C%22useVersionCodeAsOSVersion%5C%22%3Afalse%2C%5C%22apkFilterRegEx%5C%22%3A%5C%22%5C%22%2C%5C%22invertAPKFilter%5C%22%3Afalse%2C%5C%22autoApkFilterByArch%5C%22%3Atrue%2C%5C%22appName%5C%22%3A%5C%22%5C%22%2C%5C%22shizukuPretendToBeGooglePlay%5C%22%3Afalse%2C%5C%22allowInsecure%5C%22%3Afalse%2C%5C%22exemptFromBackgroundUpdates%5C%22%3Afalse%2C%5C%22skipUpdateNotifications%5C%22%3Afalse%2C%5C%22about%5C%22%3A%5C%22A%20Material%203%20YouTube%20Music%20client%20%26%20local%20music%20player%20for%20Android%5C%22%7D%22%2C%22overrideSource%22%3A%22GitHub%22%7D)
-
-
-> [!NOTE]
-> We are looking for maintainers! If you wish to become a maintainer (or even are just curious about it), please send an email to outertune@protonmail.com
-
-> [!WARNING]
-> OuterTune is in a "stable beta" phase. While this app can certainly be used as your main music player, be aware there is a possibility of bugs, incomplete features, or any other unexpected behaviour.
+**BIMO is not affiliated with YouTube, Google LLC, or any of their affiliates and subsidiaries.**
 
 ## Features
 
-OuterTune is a supercharged fork of [InnerTune](https://github.com/z-huang/InnerTune), with advanced account
-synchronization, local media playback, multiple queues, and a new take on UI design.
-
-- Play, search, and save all your songs, videos, albums, and playlists from YouTube Music
-    - Song downloading for offline playback
-    - Background playback & AD free
-- New integrated library screen design & Multiple queues
-- Advanced account synchronization
-    - YouTube Music account login support
-    - Fully fledged syncing of songs, subscriptions, ~~playlists~~ and albums — both to and from your account
-    - Playlist sync from the app to the remote account is temporally unavailable
-- Local audio file playback
-    - Play local and Youtube Music songs at the same time
-    - We don't use MediaStore's broken metadata extractor! (e.g tags delimited with `\\` now show up properly)
-- Synchronized lyrics
-- Audio normalization, tempo/pitch adjustment, and various other audio effects
-- Android Auto support
-- Support for Android 8 (Oreo) and higher
-
-> [!NOTE]
-> Read our FAQ on our [wiki](https://github.com/OuterTune/OuterTune/wiki/Frequently-Asked-Questions-(FAQ))
-
+- 🎵 **YouTube Music Integration** — Play, search, and save songs, videos, albums, and playlists from YouTube Music
+- 📥 **Song Downloading** — Download songs for offline playback
+- 🔇 **Background Playback** — AD-free background music playback
+- 📚 **Integrated Library** — Modern library screen with multiple queues
+- 🔄 **Account Sync** — YouTube Music account login with song, subscription, and album syncing
+- 🎶 **Local Music** — Play local audio files (MP3, FLAC, OGG, M4A, and more)
+- 📝 **Synchronized Lyrics** — Lyrics with karaoke-style word timing support
+- 🎛️ **Audio Effects** — Normalization, tempo/pitch adjustment, equalizer
+- 🚗 **Android Auto** — Full Android Auto support
+- 🌙 **AMOLED Dark Mode** — Pure black theme for OLED displays
+- 🎨 **Material You** — Dynamic color theming
+- 📱 **Modern Design** — Material 3 UI with smooth animations
 
 ## Screenshots
 
-<img src="./assets/main-interface.jpg" alt="Main player interface" />
-<br/><br/>
-<img src="./assets/player.jpg" alt="Player interface"/>
-<br/><br/>
-<img src="./assets/ytm-sync.jpg" alt="Sync with YouTube Music"/>
+*Coming soon*
 
-> [!WARNING]
->
->If you're in a region where YouTube Music is not supported, you won't be able to use this app
-***unless*** you have a proxy or VPN to connect to a YTM supported region.
+## Installation
 
-## Building & Contributing
+### Building from Source
 
-We are looking for contributors, translators, and maintainers! If you would like to help out, or just wish to build the
-app yourself, please see the [building and contribution notes](./CONTRIBUTING.md).
+1. Clone the repository
+2. Open in Android Studio
+3. Build the `coreDebug` variant:
+   ```bash
+   ./gradlew assembleCoreDebug
+   ```
 
-### Submitting Translations
+### Build Variants
 
-We use Weblate to translate OuterTune. For more details or to get started, visit our [Weblate page](https://hosted.weblate.org/projects/outertune/).
+| Variant | Update Checker | FFMpeg Extractor |
+|---------|---------------|------------------|
+| core    | ❌             | ❌                |
+| full    | ❌ (disabled)  | ✅                |
 
-<a href="https://hosted.weblate.org/projects/outertune/">
-<img src="https://hosted.weblate.org/widget/outertune/multi-auto.svg" alt="Translation status" />
-</a>
+## Community & Support
 
-Thank you very much for helping to make OuterTune accessible to many people worldwide.
+- **GitHub**: [https://github.com/Rana0069](https://github.com/Rana0069)
+- **Discord**: [https://discord.gg/Kn6aJYcNQX](https://discord.gg/Kn6aJYcNQX)
 
-## Donate
+Join the Discord community for support, updates, feedback, and discussion.
 
-If you like OuterTune, you're welcome to send a donation. Donations will support the development,
-including bug fixes and new features.
+## Attribution & Credits
 
-<a href="https://paypal.me/DD3Boh"><img src="./assets/paypal.png" alt="PayPal" height="60" ></a>
+BIMO is built upon the excellent work of open-source contributors:
 
-## Help & Support
+- **[OuterTune](https://github.com/OuterTune/OuterTune)** — The upstream project this fork is based on, created by DD3Boh and contributors
+- **[InnerTune](https://github.com/z-huang/InnerTune)** — The original project by Zion Huang that OuterTune was forked from
+- **[Musicolet](https://play.google.com/store/apps/details?id=in.krosbits.musicolet)** — Inspiration for local music player experience
+- **[Gramophone](https://github.com/FoedusProgramme/Gramophone)** — Lyrics parser contributions
 
-For bug reports and/or feature requests, please create a Github issue: https://github.com/OuterTune/OuterTune/issues
+All upstream contributors, licenses, and attributions are preserved in this project. See the [Attribution screen](app/src/main/java/com/rana/bimo/ui/screens/settings/AttributionScreen.kt) within the app and the [open-source licenses](app/src/main/java/com/rana/bimo/ui/screens/settings) for full details.
 
-For all other inquiries, you can contact us at outertune@protonmail.com
+## License
 
-## Attribution
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
 
-Thanks to all our contributors! Check them out [here](https://github.com/OuterTune/OuterTune/graphs/contributors)
+The upstream OuterTune and InnerTune projects are also licensed under GPL-3.0. All license requirements remain applicable to this derivative work.
 
-[z-huang/InnerTune](https://github.com/z-huang/InnerTune) for providing an awesome base for this fork, none of this
-would have been possible without it.
-
-[Musicolet](https://play.google.com/store/apps/details?id=in.krosbits.musicolet) for inspiration of a local music player
-experience done right.
-
-[Gramophone](https://github.com/FoedusProgramme/Gramophone) for emotional support, and a legendary lyrics parser
+> **Note**: I (Rana) did not write the original OuterTune or InnerTune codebase. My contributions are limited to personal customizations, UI modifications, branding, configuration changes, and improvements. The original developers and contributors retain credit for their work.
 
 ## Disclaimer
 
-This project and its contents are not affiliated with, funded, authorized, endorsed by, or in any
-way associated with YouTube, Google LLC or any of its affiliates and subsidiaries.
+This project and its contents are not affiliated with, funded, authorized, endorsed by, or in any way associated with YouTube, Google LLC or any of its affiliates and subsidiaries.
 
-Any trademark, service mark, trade name, or other intellectual property rights used in this project
-are owned by the respective owners.
+Any trademark, service mark, trade name, or other intellectual property rights used in this project are owned by the respective owners.

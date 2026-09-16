@@ -13,15 +13,15 @@ plugins {
 }
 
 android {
-    namespace = "com.dd3boh.outertune"
+    namespace = "com.rana.bimo"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.dd3boh.outertune"
+        applicationId = "com.rana.bimo"
         minSdk = 24
         targetSdk = 36
-        versionCode = 62
-        versionName = "0.9.0"
+        versionCode = 100
+        versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
@@ -79,7 +79,7 @@ android {
         variant.outputs
             .map { it as com.android.build.gradle.internal.api.BaseVariantOutputImpl }
             .forEach { output ->
-                var outputFileName = "OuterTune-${variant.versionName}-${output.baseName}-${output.versionCode}.apk"
+                var outputFileName = "BIMO-${variant.versionName}-${output.baseName}-${output.versionCode}.apk"
                 output.outputFileName = outputFileName
             }
     }
@@ -194,7 +194,7 @@ dependencies {
     Please download the [aar](https://github.com/Kyant0/taglib/releases) manually but not use maven."
      */
 //    implementation(libs.taglib) // jitpack
-    implementation(files("../prebuilt/taglib-1.0.2-outertune-universal-release.aar")) // prebuilt
+    implementation(files("../prebuilt/taglib-1.0.2-outertune-universal-release.aar")) // prebuilt (upstream library)
 //    implementation("com.kyant:taglib") // custom
 
     // sdk24 support

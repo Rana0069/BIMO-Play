@@ -74,9 +74,9 @@ body:
   - type: input
     id: app-version
     attributes:
-      label: OuterTune version
+      label: BIMO version
       description: |
-        You can find your OuterTune version in **Settings --> About**.
+        You can find your BIMO version in **Settings --> About**.
       placeholder: |
         Example: "0.5.3"
     validations:

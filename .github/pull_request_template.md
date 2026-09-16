@@ -1,4 +1,4 @@
-<!-- Hey there. Thank you so much for improving OuterTune, and filling out the details. Having roughly the same layout helps everyone considerably :)-->
+<!-- Hey there. Thank you so much for improving BIMO, and filling out the details. Having roughly the same layout helps everyone considerably :)-->
 
 ### What is it?
 

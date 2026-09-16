@@ -1,0 +1,339 @@
+/*
+ * Copyright (C) 2025 OuterTune Project
+ *
+ * SPDX-License-Identifier: GPL-3.0
+ *
+ * For any other attributions, refer to the git commit history
+ */
+
+package com.rana.bimo.utils
+
+import android.net.ConnectivityManager
+import android.net.Uri
+import android.util.Log
+import androidx.media3.common.PlaybackException
+import com.rana.bimo.constants.AudioQuality
+import com.rana.bimo.utils.YTPlayerUtils.MAIN_CLIENT
+import com.rana.bimo.utils.YTPlayerUtils.STREAM_FALLBACK_CLIENTS
+import com.rana.bimo.utils.YTPlayerUtils.validateStatus
+import com.rana.bimo.utils.potoken.PoTokenGenerator
+import com.rana.bimo.utils.potoken.PoTokenResult
+import com.zionhuang.innertube.NewPipeUtils
+import com.zionhuang.innertube.YouTube
+import com.zionhuang.innertube.models.YouTubeClient
+import com.zionhuang.innertube.models.YouTubeClient.Companion.ANDROID_VR_NO_AUTH
+import com.zionhuang.innertube.models.YouTubeClient.Companion.IOS
+import com.zionhuang.innertube.models.YouTubeClient.Companion.WEB_REMIX
+import com.zionhuang.innertube.models.response.PlayerResponse
+import okhttp3.OkHttpClient
+
+object YTPlayerUtils {
+
+    private const val TAG = "YTPlayerUtils"
+
+    private val httpClient = OkHttpClient.Builder()
+        .proxy(YouTube.proxy)
+        .build()
+
+    private val poTokenGenerator = PoTokenGenerator()
+
+    /**
+     * The main client is used for metadata and initial streams.
+     * Do not use other clients for this because it can result in inconsistent metadata.
+     * For example other clients can have different normalization targets (loudnessDb).
+     *
+     * [com.zionhuang.innertube.models.YouTubeClient.ANDROID_VR_NO_AUTH] is temporarily used as
+     * it is the only working client that consistently avoids HTTP 403 from the YouTube CDN.
+     * [com.zionhuang.innertube.models.YouTubeClient.WEB_REMIX] should be preferred once
+     * PoToken/BotGuard authentication is reliable again, as it provides:
+     * - the correct metadata (like loudnessDb)
+     * - premium formats
+     */
+    private val MAIN_CLIENT: YouTubeClient = ANDROID_VR_NO_AUTH
+
+    /**
+     * Clients used for fallback streams in case the streams of the main client do not work.
+     */
+    private val STREAM_FALLBACK_CLIENTS: Array<YouTubeClient> = arrayOf(
+        IOS, // recent API changes cause 403 after 30s with some clients
+    )
+
+    data class PlaybackData(
+        val audioConfig: PlayerResponse.PlayerConfig.AudioConfig?,
+        val videoDetails: PlayerResponse.VideoDetails?,
+        val playbackTracking: PlayerResponse.PlaybackTracking?,
+        val format: PlayerResponse.StreamingData.Format,
+        val streamUrl: String,
+        val streamExpiresInSeconds: Int,
+    )
+
+    /**
+     * Custom player response intended to use for playback.
+     * Metadata like audioConfig and videoDetails are from [MAIN_CLIENT].
+     * Format & stream can be from [MAIN_CLIENT] or [STREAM_FALLBACK_CLIENTS].
+     */
+    suspend fun playerResponseForPlayback(
+        videoId: String,
+        playlistId: String? = null,
+        audioQuality: AudioQuality,
+        connectivityManager: ConnectivityManager,
+    ): Result<PlaybackData> = runCatching {
+        Log.d(TAG, "Playback info requested: $videoId")
+
+        /**
+         * This is required for some clients to get working streams however
+         * it should not be forced for the [MAIN_CLIENT] because the response of the [MAIN_CLIENT]
+         * is required even if the streams won't work from this client.
+         * This is why it is allowed to be null.
+         */
+        val signatureTimestamp = getSignatureTimestampOrNull(videoId)
+
+        val isLoggedIn = YouTube.cookie != null
+        val sessionId =
+            if (isLoggedIn) {
+                // signed in sessions use dataSyncId as identifier
+                YouTube.dataSyncId
+            } else {
+                // signed out sessions use visitorData as identifier
+                YouTube.visitorData
+            }
+
+        Log.d(TAG, "[$videoId] signatureTimestamp: $signatureTimestamp, isLoggedIn: $isLoggedIn")
+
+        val (webPlayerPot, webStreamingPot) = getWebClientPoTokenOrNull(videoId, sessionId)?.let {
+            Pair(it.playerRequestPoToken, it.streamingDataPoToken)
+        } ?: Pair(null, null).also {
+            Log.w(TAG, "[$videoId] No po token")
+        }
+
+        val mainPlayerResponse =
+            YouTube.player(videoId, playlistId, MAIN_CLIENT, signatureTimestamp, webPlayerPot)
+                .getOrThrow()
+
+        val audioConfig = mainPlayerResponse.playerConfig?.audioConfig
+        val videoDetails = mainPlayerResponse.videoDetails
+        val playbackTracking = mainPlayerResponse.playbackTracking
+
+        var format: PlayerResponse.StreamingData.Format? = null
+        var streamUrl: String? = null
+        var streamExpiresInSeconds: Int? = null
+
+        var streamPlayerResponse: PlayerResponse? = null
+        for (clientIndex in (-1 until STREAM_FALLBACK_CLIENTS.size)) {
+            // reset for each client
+            format = null
+            streamUrl = null
+            streamExpiresInSeconds = null
+
+            // decide which client to use for streams and load its player response
+            val client: YouTubeClient
+            if (clientIndex == -1) {
+                Log.d(TAG, "Trying client: ${MAIN_CLIENT.clientName}")
+                // try with streams from main client first
+                client = MAIN_CLIENT
+                streamPlayerResponse = mainPlayerResponse
+            } else {
+                Log.d(TAG, "Trying fallback client: ${STREAM_FALLBACK_CLIENTS[clientIndex].clientName}")
+                // after main client use fallback clients
+                client = STREAM_FALLBACK_CLIENTS[clientIndex]
+
+                if (client.loginRequired && !isLoggedIn) {
+                    // skip client if it requires login but user is not logged in
+                    continue
+                }
+
+                streamPlayerResponse =
+                    YouTube.player(videoId, playlistId, client, signatureTimestamp, webPlayerPot)
+                        .getOrNull()
+            }
+
+            Log.d(TAG, "[$videoId] stream client: ${client.clientName}, " +
+                    "playabilityStatus: ${streamPlayerResponse?.playabilityStatus?.let {
+                        it.status + (it.reason?.let { " - $it" } ?: "")
+                    }}")
+
+            // process current client response
+            if (streamPlayerResponse?.playabilityStatus?.status == "OK") {
+                format =
+                    findFormat(
+                        streamPlayerResponse,
+                        audioQuality,
+                        connectivityManager,
+                    ) ?: continue
+                streamUrl = findUrlOrNull(format, videoId) ?: continue
+                streamExpiresInSeconds =
+                    streamPlayerResponse.streamingData?.expiresInSeconds ?: continue
+
+                if (client.useWebPoTokens && webStreamingPot != null) {
+                    streamUrl += "&pot=$webStreamingPot";
+                }
+
+                if (clientIndex == STREAM_FALLBACK_CLIENTS.size - 1) {
+                    /** skip [validateStatus] for last client */
+                    break
+                }
+                if (validateStatus(streamUrl)) {
+                    // working stream found
+                    Log.i(TAG, "[$videoId] [${client.clientName}] found working stream")
+                    break
+                } else {
+                    Log.w(TAG, "[$videoId] [${client.clientName}] got bad http status code")
+                }
+            }
+        }
+
+        if (streamPlayerResponse == null) {
+            throw Exception("Bad stream player response")
+        }
+        if (streamPlayerResponse.playabilityStatus.status != "OK") {
+            throw PlaybackException(
+                streamPlayerResponse.playabilityStatus.reason,
+                null,
+                PlaybackException.ERROR_CODE_REMOTE_ERROR
+            )
+        }
+        if (streamExpiresInSeconds == null) {
+            throw Exception("Missing stream expire time")
+        }
+        if (format == null) {
+            throw Exception("Could not find format")
+        }
+        if (streamUrl == null) {
+            throw Exception("Could not find stream url")
+        }
+
+        Log.d(TAG, "[$videoId] stream url domain: ${runCatching { Uri.parse(streamUrl).host }.getOrDefault("unknown")}")
+        Log.d(TAG, "[$videoId] format: mime=${format.mimeType}, bitrate=${format.bitrate}, contentLength=${format.contentLength}")
+        Log.d(TAG, "[$videoId] stream expires in: ${streamExpiresInSeconds}s")
+
+        // YouTube ANDROID_VR (and some other Android clients) embed a `range=0-<size>` query
+        // parameter directly in the stream URL. When ExoPlayer also sends an HTTP `Range:` header
+        // for a byte sub-range, some CDN edge nodes reject requests for offsets beyond the first
+        // chunk with HTTP 403. Stripping the embedded range lets ExoPlayer own range negotiation
+        // via standard HTTP Range headers, which the CDN correctly handles.
+        val finalStreamUrl = stripEmbeddedRange(streamUrl)
+        if (finalStreamUrl != streamUrl) {
+            Log.d(TAG, "[$videoId] stripped embedded range param from URL")
+        }
+
+        PlaybackData(
+            audioConfig,
+            videoDetails,
+            playbackTracking,
+            format,
+            finalStreamUrl,
+            streamExpiresInSeconds,
+        )
+    }
+
+    /**
+     * Removes the `range=<start>-<end>` query parameter embedded in YouTube stream URLs
+     * (typically returned by ANDROID_VR and similar clients). This parameter conflicts with
+     * ExoPlayer's own HTTP Range headers when fetching sequential audio chunks.
+     */
+    private fun stripEmbeddedRange(url: String): String {
+        return try {
+            val uri = Uri.parse(url)
+            val params = uri.queryParameterNames
+            if ("range" !in params) return url
+            val builder = uri.buildUpon().clearQuery()
+            for (key in params) {
+                if (key == "range") continue
+                val values = uri.getQueryParameters(key)
+                for (value in values) {
+                    builder.appendQueryParameter(key, value)
+                }
+            }
+            builder.build().toString()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to strip range param from URL", e)
+            url
+        }
+    }
+
+    /**
+     * Simple player response intended to use for metadata only.
+     * Stream URLs of this response might not work so don't use them.
+     */
+    suspend fun playerResponseForMetadata(
+        videoId: String,
+        playlistId: String? = null,
+    ): Result<PlayerResponse> =
+        YouTube.player(videoId, playlistId, client = MAIN_CLIENT)
+
+    private fun findFormat(
+        playerResponse: PlayerResponse,
+        audioQuality: AudioQuality,
+        connectivityManager: ConnectivityManager,
+    ): PlayerResponse.StreamingData.Format? =
+        playerResponse.streamingData?.adaptiveFormats
+            ?.filter { it.isAudio }
+            ?.maxByOrNull {
+                it.bitrate * when (audioQuality) {
+                    AudioQuality.AUTO -> if (connectivityManager.isActiveNetworkMetered) -1 else 1
+                    AudioQuality.HIGH -> 1
+                    AudioQuality.LOW -> -1
+                } + (if (it.mimeType.startsWith("audio/webm")) 10240 else 0) // prefer opus stream
+            }
+
+    /**
+     * Checks if the stream url returns a successful status.
+     * If this returns true the url is likely to work.
+     * If this returns false the url might cause an error during playback.
+     */
+    private fun validateStatus(url: String): Boolean {
+        try {
+            val requestBuilder = okhttp3.Request.Builder()
+                .head()
+                .url(url)
+            val response = httpClient.newCall(requestBuilder.build()).execute()
+            return response.isSuccessful
+        } catch (e: Exception) {
+            reportException(e)
+        }
+        return false
+    }
+
+    /**
+     * Wrapper around the [NewPipeUtils.getSignatureTimestamp] function which reports exceptions
+     */
+    private fun getSignatureTimestampOrNull(
+        videoId: String
+    ): Int? {
+        return NewPipeUtils.getSignatureTimestamp(videoId)
+            .onFailure {
+                reportException(it)
+            }
+            .getOrNull()
+    }
+
+    /**
+     * Wrapper around the [NewPipeUtils.getStreamUrl] function which reports exceptions
+     */
+    private fun findUrlOrNull(
+        format: PlayerResponse.StreamingData.Format,
+        videoId: String
+    ): String? {
+        return NewPipeUtils.getStreamUrl(format, videoId)
+            .onFailure {
+                reportException(it)
+            }
+            .getOrNull()
+    }
+
+    /**
+     * Wrapper around the [PoTokenGenerator.getWebClientPoToken] function which reports exceptions
+     */
+    private fun getWebClientPoTokenOrNull(videoId: String, sessionId: String?): PoTokenResult? {
+        if (sessionId == null) {
+            Log.d(TAG, "[$videoId] Session identifier is null")
+            return null
+        }
+        try {
+            return poTokenGenerator.getWebClientPoToken(videoId, sessionId)
+        } catch (e: Exception) {
+            reportException(e)
+        }
+        return null
+    }
+}

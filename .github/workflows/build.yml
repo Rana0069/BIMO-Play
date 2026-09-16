@@ -1,4 +1,4 @@
-name: Build debug APK
+name: Build BIMO debug APK
 on:
   workflow_dispatch:
   push:
