@@ -15,5 +15,6 @@ dependencies {
     implementation(libs.ktor.client.encoding)
     implementation(libs.brotli)
     implementation(libs.newpipe.extractor)
+    implementation("org.mozilla:rhino:1.8.0")
     testImplementation(libs.junit)
 }
