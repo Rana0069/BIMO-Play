@@ -256,9 +256,10 @@ object YTPlayerUtils {
     private fun validateStatus(url: String, userAgent: String): Boolean {
         try {
             val requestBuilder = okhttp3.Request.Builder()
-                .head()
+                .get()
                 .url(url)
                 .header("User-Agent", userAgent)
+                .header("Range", "bytes=0-0")
             val response = httpClient.newCall(requestBuilder.build()).execute()
             return response.isSuccessful
         } catch (e: Exception) {
