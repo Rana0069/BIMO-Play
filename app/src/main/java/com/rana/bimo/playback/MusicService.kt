@@ -135,7 +135,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import com.zionhuang.innertube.models.YouTubeClient
 import java.io.File
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -749,11 +748,6 @@ class MusicService : MediaLibraryService(),
 
 
     private fun createCacheDataSource(): CacheDataSource.Factory {
-        // Use the ANDROID_VR user-agent when fetching stream data.
-        // This must match the user-agent used during the Innertube player request, otherwise
-        // YouTube CDN may reject subsequent byte-range requests with HTTP 403.
-        val streamingUserAgent = YouTubeClient.ANDROID_VR_NO_AUTH.userAgent
-
         return CacheDataSource.Factory()
             .setCache(downloadCache)
             .setUpstreamDataSourceFactory(
@@ -765,8 +759,27 @@ class MusicService : MediaLibraryService(),
                             OkHttpDataSource.Factory(
                                 OkHttpClient.Builder()
                                     .proxy(YouTube.proxy)
+                                    .addInterceptor { chain ->
+                                        val request = chain.request()
+                                        val response = chain.proceed(request)
+                                        var redirectCount = 0
+                                        var prior = response.priorResponse
+                                        while (prior != null) {
+                                            redirectCount++
+                                            prior = prior.priorResponse
+                                        }
+                                        Log.d(
+                                            TAG,
+                                            "CDN ${request.method} ${request.url.host}${request.url.encodedPath} " +
+                                                    "range=${request.header("Range") ?: "none"} " +
+                                                    "ua=${request.header("User-Agent")?.take(32) ?: "none"} " +
+                                                    "params=${request.url.queryParameterNames.joinToString(",")} " +
+                                                    "status=${response.code} redirects=$redirectCount"
+                                        )
+                                        response
+                                    }
                                     .build()
-                            ).setUserAgent(streamingUserAgent)
+                            )
                         )
                     )
                     .setCacheWriteDataSinkFactory(
@@ -783,7 +796,7 @@ class MusicService : MediaLibraryService(),
     }
 
     private fun createDataSourceFactory(): DataSource.Factory {
-        val songUrlCache = HashMap<String, Pair<String, Long>>()
+        val songUrlCache = HashMap<String, Triple<String, Long, String>>()
         return ResolvingDataSource.Factory(createCacheDataSource()) { dataSpec ->
             val mediaId = dataSpec.key ?: error("No media id")
             Log.d(TAG, "PLAYING: song id = $mediaId")
@@ -825,6 +838,7 @@ class MusicService : MediaLibraryService(),
                 Log.d(TAG, "PLAYING: remote song (temp cache), position=${dataSpec.position}, urlExpiry=${(it.second - System.currentTimeMillis()) / 1000}s remaining")
                 scope.launch(Dispatchers.IO) { recoverSong(mediaId) }
                 return@Factory dataSpec.withUri(it.first.toUri())
+                    .withAdditionalHeaders(mapOf("User-Agent" to it.third))
             }
 
             Log.d(TAG, "PLAYING: remote song (online fetch)")
@@ -883,9 +897,15 @@ class MusicService : MediaLibraryService(),
 
             val streamUrl = playbackData.streamUrl
 
-            songUrlCache[mediaId] =
-                streamUrl to System.currentTimeMillis() + (playbackData.streamExpiresInSeconds * 1000L)
-            dataSpec.withUri(streamUrl.toUri()).subrange(dataSpec.uriPositionOffset, CHUNK_LENGTH)
+            songUrlCache[mediaId] = Triple(
+                streamUrl,
+                System.currentTimeMillis() + (playbackData.streamExpiresInSeconds * 1000L),
+                playbackData.streamUserAgent,
+            )
+            // Keep the range contract embedded in the YouTube URL. Forcing fixed 512 KiB
+            // subranges makes ANDROID_VR CDN URLs reject the second request with HTTP 403.
+            dataSpec.withUri(streamUrl.toUri())
+                .withAdditionalHeaders(mapOf("User-Agent" to playbackData.streamUserAgent))
         }
     }
 

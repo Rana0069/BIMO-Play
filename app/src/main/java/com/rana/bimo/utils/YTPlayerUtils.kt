@@ -21,8 +21,8 @@ import com.rana.bimo.utils.potoken.PoTokenResult
 import com.zionhuang.innertube.NewPipeUtils
 import com.zionhuang.innertube.YouTube
 import com.zionhuang.innertube.models.YouTubeClient
-import com.zionhuang.innertube.models.YouTubeClient.Companion.ANDROID_VR_NO_AUTH
 import com.zionhuang.innertube.models.YouTubeClient.Companion.IOS
+import com.zionhuang.innertube.models.YouTubeClient.Companion.TVHTML5_SIMPLY_EMBEDDED_PLAYER
 import com.zionhuang.innertube.models.YouTubeClient.Companion.WEB_REMIX
 import com.zionhuang.innertube.models.response.PlayerResponse
 import okhttp3.OkHttpClient
@@ -42,20 +42,18 @@ object YTPlayerUtils {
      * Do not use other clients for this because it can result in inconsistent metadata.
      * For example other clients can have different normalization targets (loudnessDb).
      *
-     * [com.zionhuang.innertube.models.YouTubeClient.ANDROID_VR_NO_AUTH] is temporarily used as
-     * it is the only working client that consistently avoids HTTP 403 from the YouTube CDN.
-     * [com.zionhuang.innertube.models.YouTubeClient.WEB_REMIX] should be preferred once
-     * PoToken/BotGuard authentication is reliable again, as it provides:
+     * [com.zionhuang.innertube.models.YouTubeClient.WEB_REMIX] is preferred because it provides:
      * - the correct metadata (like loudnessDb)
      * - premium formats
      */
-    private val MAIN_CLIENT: YouTubeClient = ANDROID_VR_NO_AUTH
+    private val MAIN_CLIENT: YouTubeClient = WEB_REMIX
 
     /**
      * Clients used for fallback streams in case the streams of the main client do not work.
      */
     private val STREAM_FALLBACK_CLIENTS: Array<YouTubeClient> = arrayOf(
-        IOS, // recent API changes cause 403 after 30s with some clients
+        TVHTML5_SIMPLY_EMBEDDED_PLAYER,
+        IOS,
     )
 
     data class PlaybackData(
@@ -64,6 +62,7 @@ object YTPlayerUtils {
         val playbackTracking: PlayerResponse.PlaybackTracking?,
         val format: PlayerResponse.StreamingData.Format,
         val streamUrl: String,
+        val streamUserAgent: String,
         val streamExpiresInSeconds: Int,
     )
 
@@ -116,6 +115,7 @@ object YTPlayerUtils {
 
         var format: PlayerResponse.StreamingData.Format? = null
         var streamUrl: String? = null
+        var streamUserAgent: String? = null
         var streamExpiresInSeconds: Int? = null
 
         var streamPlayerResponse: PlayerResponse? = null
@@ -123,6 +123,7 @@ object YTPlayerUtils {
             // reset for each client
             format = null
             streamUrl = null
+            streamUserAgent = null
             streamExpiresInSeconds = null
 
             // decide which client to use for streams and load its player response
@@ -161,6 +162,7 @@ object YTPlayerUtils {
                         connectivityManager,
                     ) ?: continue
                 streamUrl = findUrlOrNull(format, videoId) ?: continue
+                streamUserAgent = client.userAgent
                 streamExpiresInSeconds =
                     streamPlayerResponse.streamingData?.expiresInSeconds ?: continue
 
@@ -172,7 +174,7 @@ object YTPlayerUtils {
                     /** skip [validateStatus] for last client */
                     break
                 }
-                if (validateStatus(streamUrl)) {
+                if (validateStatus(streamUrl, client.userAgent)) {
                     // working stream found
                     Log.i(TAG, "[$videoId] [${client.clientName}] found working stream")
                     break
@@ -201,54 +203,23 @@ object YTPlayerUtils {
         if (streamUrl == null) {
             throw Exception("Could not find stream url")
         }
+        if (streamUserAgent == null) {
+            throw Exception("Missing stream user agent")
+        }
 
         Log.d(TAG, "[$videoId] stream url domain: ${runCatching { Uri.parse(streamUrl).host }.getOrDefault("unknown")}")
         Log.d(TAG, "[$videoId] format: mime=${format.mimeType}, bitrate=${format.bitrate}, contentLength=${format.contentLength}")
         Log.d(TAG, "[$videoId] stream expires in: ${streamExpiresInSeconds}s")
-
-        // YouTube ANDROID_VR (and some other Android clients) embed a `range=0-<size>` query
-        // parameter directly in the stream URL. When ExoPlayer also sends an HTTP `Range:` header
-        // for a byte sub-range, some CDN edge nodes reject requests for offsets beyond the first
-        // chunk with HTTP 403. Stripping the embedded range lets ExoPlayer own range negotiation
-        // via standard HTTP Range headers, which the CDN correctly handles.
-        val finalStreamUrl = stripEmbeddedRange(streamUrl)
-        if (finalStreamUrl != streamUrl) {
-            Log.d(TAG, "[$videoId] stripped embedded range param from URL")
-        }
 
         PlaybackData(
             audioConfig,
             videoDetails,
             playbackTracking,
             format,
-            finalStreamUrl,
+            streamUrl,
+            streamUserAgent,
             streamExpiresInSeconds,
         )
-    }
-
-    /**
-     * Removes the `range=<start>-<end>` query parameter embedded in YouTube stream URLs
-     * (typically returned by ANDROID_VR and similar clients). This parameter conflicts with
-     * ExoPlayer's own HTTP Range headers when fetching sequential audio chunks.
-     */
-    private fun stripEmbeddedRange(url: String): String {
-        return try {
-            val uri = Uri.parse(url)
-            val params = uri.queryParameterNames
-            if ("range" !in params) return url
-            val builder = uri.buildUpon().clearQuery()
-            for (key in params) {
-                if (key == "range") continue
-                val values = uri.getQueryParameters(key)
-                for (value in values) {
-                    builder.appendQueryParameter(key, value)
-                }
-            }
-            builder.build().toString()
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to strip range param from URL", e)
-            url
-        }
     }
 
     /**
@@ -281,11 +252,12 @@ object YTPlayerUtils {
      * If this returns true the url is likely to work.
      * If this returns false the url might cause an error during playback.
      */
-    private fun validateStatus(url: String): Boolean {
+    private fun validateStatus(url: String, userAgent: String): Boolean {
         try {
             val requestBuilder = okhttp3.Request.Builder()
                 .head()
                 .url(url)
+                .header("User-Agent", userAgent)
             val response = httpClient.newCall(requestBuilder.build()).execute()
             return response.isSuccessful
         } catch (e: Exception) {
