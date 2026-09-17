@@ -73,32 +73,39 @@ object NewPipeUtils {
 
     fun getStreamUrl(format: PlayerResponse.StreamingData.Format, videoId: String): Result<String> =
         runCatching {
+            // Step 1: Resolve the base stream URL (handle signatureCipher if needed)
             val url = format.url ?: format.signatureCipher?.let { signatureCipher ->
                 val params = parseQueryString(signatureCipher)
                 val obfuscatedSignature = params["s"]
                     ?: throw ParsingException("Could not parse cipher signature")
                 val signatureParam = params["sp"]
                     ?: throw ParsingException("Could not parse cipher signature parameter")
-                val url = params["url"]?.let { URLBuilder(it) }
+                val urlBuilder = params["url"]?.let { URLBuilder(it) }
                     ?: throw ParsingException("Could not parse cipher url")
 
-                // Use Rhino-based deobfuscator first (works even when YouTube changes JS obfuscation).
-                // Falls back to the NewPipeExtractor regex-based approach if Rhino fails.
-                url.parameters[signatureParam] = try {
+                // Use Rhino-based deobfuscator (robust against YouTube JS obfuscation changes).
+                // Falls back to NewPipeExtractor regex approach if Rhino fails.
+                urlBuilder.parameters[signatureParam] = try {
                     RhinoSignatureDeobfuscator.deobfuscate(videoId, obfuscatedSignature)
                 } catch (rhinoEx: Exception) {
-                    // Rhino fallback: try the original NewPipe regex-based approach
                     runCatching {
                         YoutubeJavaScriptPlayerManager.deobfuscateSignature(videoId, obfuscatedSignature)
-                    }.getOrElse { throw rhinoEx } // if both fail, rethrow the Rhino exception
+                    }.getOrElse { throw rhinoEx }
                 }
-                url.toString()
+                urlBuilder.toString()
             } ?: throw ParsingException("Could not find format url")
 
-            return@runCatching YoutubeJavaScriptPlayerManager.getUrlWithThrottlingParameterDeobfuscated(
-                videoId,
-                url
-            )
+            // Step 2: Deobfuscate the throttling 'n' parameter for full speed.
+            // This uses regex patterns that may break when YouTube updates their player.
+            // If it fails, we return the URL as-is — it still works, just at reduced speed.
+            return@runCatching try {
+                YoutubeJavaScriptPlayerManager.getUrlWithThrottlingParameterDeobfuscated(
+                    videoId,
+                    url
+                )
+            } catch (_: Exception) {
+                url // Return the unthrottled URL — stream still plays fine
+            }
         }
 
-}
+}
