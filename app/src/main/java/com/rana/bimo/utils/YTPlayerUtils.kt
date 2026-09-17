@@ -52,6 +52,7 @@ object YTPlayerUtils {
      * Clients used for fallback streams in case the streams of the main client do not work.
      */
     private val STREAM_FALLBACK_CLIENTS: Array<YouTubeClient> = arrayOf(
+        YouTubeClient.ANDROID_VR_NO_AUTH,
         TVHTML5_SIMPLY_EMBEDDED_PLAYER,
         IOS,
     )

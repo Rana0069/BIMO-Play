@@ -8,15 +8,20 @@ import java.util.regex.Pattern
 
 /**
  * Robust YouTube signature deobfuscator using Mozilla Rhino JS engine.
- * Bypasses brittle regex patterns in NewPipeExtractor by dynamically finding
- * the deobfuscation call site in base.js and injecting a named wrapper function.
- * The evaluated Rhino scope is cached per player JS hash (once per player version).
+ *
+ * YouTube regularly changes the obfuscated function names in base.js, breaking the
+ * static regex patterns in NewPipeExtractor. This class dynamically scans base.js for
+ * the signature deobfuscation call site, injects a stable wrapper hook, and evaluates
+ * the JS using Rhino to decode any given signature.
+ *
+ * The Rhino context + scope are kept open and cached per player JS hash, so the
+ * expensive JS evaluation only happens once per YouTube player version.
  */
 object RhinoSignatureDeobfuscator {
 
     private val log: Logger = Logger.getLogger("RhinoSigDeobfuscator")
 
-    // Patterns to locate the signature deobfuscation call site in base.js
+    /** Patterns to locate the sig deobfuscation call site in base.js */
     private val CALL_PATTERNS = listOf(
         // Current (2025+): outerFn(num, num, innerFn(num, num, b.s))
         Pattern.compile("""([a-zA-Z0-9_$]+)\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*([a-zA-Z0-9_$]+)\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\w+)\.s\s*\)\s*\)"""),
@@ -45,32 +50,38 @@ object RhinoSignatureDeobfuscator {
         var console = { log: function() {}, warn: function() {}, error: function() {}, debug: function() {} };
     """.trimIndent()
 
-    private data class CachedScope(val scope: Scriptable, val jsCodeHash: Int)
+    /**
+     * We keep a single Rhino Context open (entered) so the scope remains valid.
+     * Rhino requires the context that created a scope to be active when evaluating against it.
+     */
+    private data class RhinoCache(
+        val cx: Context,
+        val scope: Scriptable,
+        val jsCodeHash: Int,
+    )
 
-    @Volatile private var cache: CachedScope? = null
+    @Volatile private var cache: RhinoCache? = null
 
     /**
-     * Deobfuscates a YouTube stream signature using Rhino JavaScript engine.
-     * Falls back by rethrowing if deobfuscation fails.
+     * Deobfuscates a YouTube stream signature.
+     * Thread-safe via @Synchronized.
      */
     @Synchronized
     fun deobfuscate(videoId: String, obfuscatedSignature: String): String {
         val jsCode = getPlayerJs(videoId)
-        val scope = getOrCreateScope(jsCode)
+        val rhinoCache = getOrBuildCache(jsCode)
+
         val escapedSig = obfuscatedSignature
             .replace("""\""", """\\""")
             .replace("'", "\\'")
-        val cx = Context.enter()
-        cx.optimizationLevel = -1
-        return try {
-            val result = cx.evaluateString(
-                scope, "_yt_player.__deobfuscate('$escapedSig')", "deobf", 1, null
-            )
-            result.toString().also {
-                log.fine("[$videoId] Deobfuscated sig (len=${it.length})")
-            }
-        } finally {
-            Context.exit()
+
+        val result = rhinoCache.cx.evaluateString(
+            rhinoCache.scope,
+            "_yt_player.__deobfuscate('$escapedSig')",
+            "deobf", 1, null
+        )
+        return result.toString().also {
+            log.fine("[$videoId] Deobfuscated sig (len=${it.length})")
         }
     }
 
@@ -85,35 +96,48 @@ object RhinoSignatureDeobfuscator {
             ?: throw IllegalStateException("NewPipeExtractor did not cache the player JS")
     }
 
-    private fun getOrCreateScope(jsCode: String): Scriptable {
+    private fun getOrBuildCache(jsCode: String): RhinoCache {
         val hash = jsCode.hashCode()
-        cache?.let { if (it.jsCodeHash == hash) return it.scope }
+        cache?.let { if (it.jsCodeHash == hash) return it }
 
-        log.fine("Building new Rhino scope (jsCode.length=${jsCode.length})")
+        // Exit any previously entered context from a prior cache
+        cache?.let {
+            try { Context.exit() } catch (_: Exception) {}
+        }
+        cache = null
+
+        log.fine("Building new Rhino cache (jsCode.length=${jsCode.length})")
         val t0 = System.currentTimeMillis()
-        val cx = Context.enter()
-        cx.optimizationLevel = -1
-        return try {
-            val scope = cx.initStandardObjects()
-            val hookCode = buildHookCode(jsCode)
-                ?: throw IllegalStateException("Could not locate sig deobfuscation call in base.js")
 
-            // Inject hook inside the _yt_player IIFE before its closing bracket
-            val closingIife = "})(_yt_player);"
-            val insertIdx = jsCode.lastIndexOf(closingIife)
-            val modifiedJs = if (insertIdx >= 0) {
-                jsCode.substring(0, insertIdx) + hookCode + jsCode.substring(insertIdx)
-            } else {
-                log.warning("Could not find IIFE closing bracket, appending hook at end")
-                jsCode + "\n" + hookCode
+        // Enter context and KEEP it entered - we store it in cache for reuse
+        val cx = Context.enter()
+        @Suppress("DEPRECATION")
+        cx.optimizationLevel = -1
+
+        val hookCode = buildHookCode(jsCode)
+            ?: run {
+                Context.exit()
+                throw IllegalStateException("Could not locate sig deobfuscation call in base.js")
             }
 
+        val closingIife = "})(_yt_player);"
+        val insertIdx = jsCode.lastIndexOf(closingIife)
+        val modifiedJs = if (insertIdx >= 0) {
+            jsCode.substring(0, insertIdx) + hookCode + jsCode.substring(insertIdx)
+        } else {
+            log.warning("Could not find IIFE closing, appending hook at end")
+            jsCode + "\n" + hookCode
+        }
+
+        return try {
+            val scope = cx.initStandardObjects()
             cx.evaluateString(scope, BROWSER_STUBS, "stubs", 1, null)
             cx.evaluateString(scope, modifiedJs, "base.js", 1, null)
-            log.fine("Rhino scope ready in ${System.currentTimeMillis() - t0}ms")
-            scope.also { cache = CachedScope(it, hash) }
-        } finally {
+            log.fine("Rhino cache built in ${System.currentTimeMillis() - t0}ms")
+            RhinoCache(cx, scope, hash).also { cache = it }
+        } catch (e: Exception) {
             Context.exit()
+            throw e
         }
     }
 
@@ -123,18 +147,21 @@ object RhinoSignatureDeobfuscator {
             if (!matcher.find()) continue
             val callExpr = matcher.group(0) ?: continue
             log.fine("Found sig call: $callExpr")
-            // Find the variable name with .s (the obfuscated sig parameter)
             val varMatcher = Pattern.compile("""(\w+)\.s\s*\)""").matcher(callExpr)
             val sigVar = if (varMatcher.find()) varMatcher.group(1) else null
             val deobfCall = when {
-                sigVar != null -> callExpr.replace("$sigVar.s", "s")
+                sigVar != null -> callExpr.replace("${sigVar}.s", "s")
                 else -> callExpr.replace(Regex("""\w+\.s"""), "s")
             }
-            return ";g.__deobfuscate = function(s) { return $deobfCall; };"
+            return ";g.__deobfuscate = function(s) { return ${deobfCall}; };"
         }
         return null
     }
 
-    /** Clears the cached scope, forcing re-evaluation on the next deobfuscate call. */
-    fun clearCache() { cache = null }
+    /** Forces re-evaluation of base.js on next call (e.g. after YouTube player update). */
+    @Synchronized
+    fun clearCache() {
+        cache?.let { try { Context.exit() } catch (_: Exception) {} }
+        cache = null
+    }
 }
