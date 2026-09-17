@@ -81,11 +81,17 @@ object NewPipeUtils {
                     ?: throw ParsingException("Could not parse cipher signature parameter")
                 val url = params["url"]?.let { URLBuilder(it) }
                     ?: throw ParsingException("Could not parse cipher url")
-                url.parameters[signatureParam] =
-                    YoutubeJavaScriptPlayerManager.deobfuscateSignature(
-                        videoId,
-                        obfuscatedSignature
-                    )
+
+                // Use Rhino-based deobfuscator first (works even when YouTube changes JS obfuscation).
+                // Falls back to the NewPipeExtractor regex-based approach if Rhino fails.
+                url.parameters[signatureParam] = try {
+                    RhinoSignatureDeobfuscator.deobfuscate(videoId, obfuscatedSignature)
+                } catch (rhinoEx: Exception) {
+                    // Rhino fallback: try the original NewPipe regex-based approach
+                    runCatching {
+                        YoutubeJavaScriptPlayerManager.deobfuscateSignature(videoId, obfuscatedSignature)
+                    }.getOrElse { throw rhinoEx } // if both fail, rethrow the Rhino exception
+                }
                 url.toString()
             } ?: throw ParsingException("Could not find format url")
 
