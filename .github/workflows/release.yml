@@ -1,0 +1,136 @@
+name: Build and Release BIMO APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.0.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Set up Android SDK & Build Tools
+        uses: android-actions/setup-android@v3
+
+      - name: Determine Version
+        id: get_version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" =~ ^refs/tags/v(.*)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+          else
+            VERSION=$(grep 'versionName' app/build.gradle.kts | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "TAG=v$VERSION" >> $GITHUB_ENV
+          echo "Resolved version: $VERSION (Tag: v$VERSION)"
+
+      - name: Build Core Release APKs
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleCoreRelease --stacktrace -DskipFormatKtlint
+
+      - name: Sign Release APKs
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BIMO_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.BIMO_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BIMO_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BIMO_KEY_PASSWORD }}
+        run: |
+          APKSIGNER=$(find $ANDROID_HOME/build-tools -name apksigner | sort -V | tail -n 1)
+          echo "Using apksigner: $APKSIGNER"
+
+          mkdir -p release_assets
+
+          UNIVERSAL_SRC=$(find app/build/outputs/apk/core/release -name "*universal*.apk" | head -n 1)
+          ARM64_SRC=$(find app/build/outputs/apk/core/release -name "*arm64*.apk" | head -n 1)
+
+          cp "$UNIVERSAL_SRC" "release_assets/BIMO-v${VERSION}.apk"
+          if [ -n "$ARM64_SRC" ]; then
+            cp "$ARM64_SRC" "release_assets/BIMO-v${VERSION}-arm64.apk"
+          fi
+
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Signing with provided GitHub Secrets keystore..."
+            echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+            $APKSIGNER sign --ks release.keystore --ks-key-alias "$KEY_ALIAS" --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEY_PASSWORD" "release_assets/BIMO-v${VERSION}.apk"
+            if [ -f "release_assets/BIMO-v${VERSION}-arm64.apk" ]; then
+              $APKSIGNER sign --ks release.keystore --ks-key-alias "$KEY_ALIAS" --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEY_PASSWORD" "release_assets/BIMO-v${VERSION}-arm64.apk"
+            fi
+            rm -f release.keystore
+          else
+            echo "No GitHub Secrets keystore found; signing with self-signed release key..."
+            keytool -genkeypair -v -keystore auto_release.keystore -alias bimo -keyalg RSA -keysize 2048 -validity 10000 -storepass bimopassword -keypass bimopassword -dname "CN=BIMO, OU=Rana, O=BIMO, L=Unknown, ST=Unknown, C=IN"
+            $APKSIGNER sign --ks auto_release.keystore --ks-key-alias bimo --ks-pass pass:bimopassword --key-pass pass:bimopassword "release_assets/BIMO-v${VERSION}.apk"
+            if [ -f "release_assets/BIMO-v${VERSION}-arm64.apk" ]; then
+              $APKSIGNER sign --ks auto_release.keystore --ks-key-alias bimo --ks-pass pass:bimopassword --key-pass pass:bimopassword "release_assets/BIMO-v${VERSION}-arm64.apk"
+            fi
+            rm -f auto_release.keystore
+          fi
+
+          $APKSIGNER verify --verbose "release_assets/BIMO-v${VERSION}.apk"
+
+      - name: Generate SHA-256 Checksums
+        run: |
+          cd release_assets
+          sha256sum "BIMO-v${VERSION}.apk" > "BIMO-v${VERSION}.apk.sha256"
+          if [ -f "BIMO-v${VERSION}-arm64.apk" ]; then
+            sha256sum "BIMO-v${VERSION}-arm64.apk" > "BIMO-v${VERSION}-arm64.apk.sha256"
+          fi
+          cat "BIMO-v${VERSION}.apk.sha256"
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TITLE="BIMO v${VERSION}"
+          RELEASE_BODY="## BIMO v${VERSION}
+
+          **Modern Android music player created and maintained by Rana.**
+
+          ### Highlights
+          - Modern Material 3 interface with dynamic AMOLED dark mode
+          - Background playback & lock screen MediaSession controls
+          - YouTube Music integration & synchronized lyrics
+          - Local audio file playback and library management
+          - Audio normalization, equalizer, and performance enhancements
+
+          ### Downloads
+          Download the Android APK directly from the assets below:
+          - **BIMO-v${VERSION}.apk** (Universal APK for all Android devices)
+          - **BIMO-v${VERSION}-arm64.apk** (Optimized for modern 64-bit phones)
+
+          ### Verification
+          SHA-256 checksums are provided alongside the APK files for integrity verification.
+
+          ---
+          **Developer:** [Rana](https://github.com/Rana0069)
+          **Discord Community:** https://discord.gg/Kn6aJYcNQX"
+
+          gh release create "$TAG" release_assets/* \
+            --title "$RELEASE_TITLE" \
+            --notes "$RELEASE_BODY" || gh release upload "$TAG" release_assets/* --clobber

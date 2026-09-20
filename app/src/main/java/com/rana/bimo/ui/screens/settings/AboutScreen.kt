@@ -118,7 +118,7 @@ fun AboutScreen(
         }
 
         Text(
-            text = "A personal music player customized by Rana",
+            text = "Developed and maintained by Rana",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 4.dp)
@@ -177,23 +177,9 @@ fun AboutScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        // Upstream attribution
         Column(
             modifier = Modifier.padding(horizontal = 16.dp)
         ) {
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Based on open-source projects including OuterTune and InnerTune. Their respective contributors and licenses remain credited.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-
             ElevatedCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -203,12 +189,6 @@ fun AboutScreen(
                         navController.navigate("settings/about/attribution")
                     }
                 )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth()
-            ) {
                 PreferenceEntry(
                     title = { Text(stringResource(R.string.oss_licenses_title)) },
                     onClick = {
@@ -222,9 +202,27 @@ fun AboutScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 PreferenceEntry(
+                    title = { Text("Privacy Policy") },
+                    onClick = {
+                        uriHandler.openUri("https://github.com/Rana0069/BIMO-Play/blob/dev/PRIVACY.md")
+                    }
+                )
+                PreferenceEntry(
+                    title = { Text("Terms of Use") },
+                    onClick = {
+                        uriHandler.openUri("https://github.com/Rana0069/BIMO-Play/blob/dev/TERMS.md")
+                    }
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                PreferenceEntry(
                     title = { Text(stringResource(R.string.help_bug_report_action)) },
                     onClick = {
-                        uriHandler.openUri("https://github.com/Rana0069")
+                        uriHandler.openUri("https://github.com/Rana0069/BIMO-Play/issues")
                     }
                 )
                 PreferenceEntry(
