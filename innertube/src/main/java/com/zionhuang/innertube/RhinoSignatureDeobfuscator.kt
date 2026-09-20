@@ -50,12 +50,7 @@ object RhinoSignatureDeobfuscator {
         var console = { log: function() {}, warn: function() {}, error: function() {}, debug: function() {} };
     """.trimIndent()
 
-    /**
-     * We keep a single Rhino Context open (entered) so the scope remains valid.
-     * Rhino requires the context that created a scope to be active when evaluating against it.
-     */
     private data class RhinoCache(
-        val cx: Context,
         val scope: Scriptable,
         val jsCodeHash: Int,
     )
@@ -75,13 +70,19 @@ object RhinoSignatureDeobfuscator {
             .replace("""\""", """\\""")
             .replace("'", "\\'")
 
-        val result = rhinoCache.cx.evaluateString(
-            rhinoCache.scope,
-            "_yt_player.__deobfuscate('$escapedSig')",
-            "deobf", 1, null
-        )
-        return result.toString().also {
-            log.fine("[$videoId] Deobfuscated sig (len=${it.length})")
+        val cx = Context.enter()
+        try {
+            cx.optimizationLevel = -1
+            val result = cx.evaluateString(
+                rhinoCache.scope,
+                "_yt_player.__deobfuscate('$escapedSig')",
+                "deobf", 1, null
+            )
+            return result.toString().also {
+                log.fine("[$videoId] Deobfuscated sig (len=${it.length})")
+            }
+        } finally {
+            Context.exit()
         }
     }
 
@@ -100,44 +101,40 @@ object RhinoSignatureDeobfuscator {
         val hash = jsCode.hashCode()
         cache?.let { if (it.jsCodeHash == hash) return it }
 
-        // Exit any previously entered context from a prior cache
-        cache?.let {
-            try { Context.exit() } catch (_: Exception) {}
-        }
         cache = null
 
         log.fine("Building new Rhino cache (jsCode.length=${jsCode.length})")
         val t0 = System.currentTimeMillis()
 
-        // Enter context and KEEP it entered - we store it in cache for reuse
         val cx = Context.enter()
-        @Suppress("DEPRECATION")
-        cx.optimizationLevel = -1
+        try {
+            @Suppress("DEPRECATION")
+            cx.optimizationLevel = -1
 
-        val hookCode = buildHookCode(jsCode)
-            ?: run {
-                Context.exit()
-                throw IllegalStateException("Could not locate sig deobfuscation call in base.js")
+            val hookCode = buildHookCode(jsCode)
+                ?: run {
+                    throw IllegalStateException("Could not locate sig deobfuscation call in base.js")
+                }
+
+            val closingIife = "})(_yt_player);"
+            val insertIdx = jsCode.lastIndexOf(closingIife)
+            val modifiedJs = if (insertIdx >= 0) {
+                jsCode.substring(0, insertIdx) + hookCode + jsCode.substring(insertIdx)
+            } else {
+                log.warning("Could not find IIFE closing, appending hook at end")
+                jsCode + "\n" + hookCode
             }
 
-        val closingIife = "})(_yt_player);"
-        val insertIdx = jsCode.lastIndexOf(closingIife)
-        val modifiedJs = if (insertIdx >= 0) {
-            jsCode.substring(0, insertIdx) + hookCode + jsCode.substring(insertIdx)
-        } else {
-            log.warning("Could not find IIFE closing, appending hook at end")
-            jsCode + "\n" + hookCode
-        }
-
-        return try {
             val scope = cx.initStandardObjects()
             cx.evaluateString(scope, BROWSER_STUBS, "stubs", 1, null)
             cx.evaluateString(scope, modifiedJs, "base.js", 1, null)
             log.fine("Rhino cache built in ${System.currentTimeMillis() - t0}ms")
-            RhinoCache(cx, scope, hash).also { cache = it }
-        } catch (e: Exception) {
+            
+            val newCache = RhinoCache(scope, hash)
+            cache = newCache
+            return newCache
+        } finally {
             Context.exit()
-            throw e
         }
     }
 
@@ -161,7 +158,6 @@ object RhinoSignatureDeobfuscator {
     /** Forces re-evaluation of base.js on next call (e.g. after YouTube player update). */
     @Synchronized
     fun clearCache() {
-        cache?.let { try { Context.exit() } catch (_: Exception) {} }
         cache = null
     }
 }

@@ -213,6 +213,7 @@ class MusicService : MediaLibraryService(),
     private var isAudioEffectSessionOpened = false
 
     var consecutivePlaybackErr = 0
+    private val songUrlCache = HashMap<String, Triple<String, Long, String>>()
 
     override fun onCreate() {
         super.onCreate()
@@ -258,12 +259,68 @@ class MusicService : MediaLibraryService(),
                     override fun onPlayerError(error: PlaybackException) {
                         super.onPlayerError(error)
 
+                        Log.e(TAG, "================ EXOPLAYER ERROR ================")
+                        Log.e(TAG, "errorCode: ${error.errorCode}")
+                        Log.e(TAG, "errorCodeName: ${error.errorCodeName}")
+                        Log.e(TAG, "message: ${error.message}")
+                        
+                        var cause: Throwable? = error.cause
+                        var depth = 1
+                        var httpException: androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException? = null
+                        
+                        while (cause != null && depth <= 5) {
+                            Log.e(TAG, "cause[$depth]: ${cause.javaClass.simpleName}: ${cause.message}")
+                            if (cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+                                httpException = cause
+                            }
+                            cause = cause.cause
+                            depth++
+                        }
+
+                        if (httpException != null) {
+                            Log.e(TAG, "--- HTTP ERROR DETAILS ---")
+                            Log.e(TAG, "responseCode: ${httpException.responseCode}")
+                            
+                            val dataSpec = httpException.dataSpec
+                            Log.e(TAG, "dataSpec.uri HOST: ${dataSpec.uri.host}")
+                            
+                            val safeReqHeaders = dataSpec.httpRequestHeaders.mapValues { (k, v) ->
+                                if (k.equals("Authorization", true) || k.equals("Cookie", true) || 
+                                    v.contains("pot=") || v.contains("signature=")) "<redacted>" else v
+                            }
+                            Log.e(TAG, "dataSpec.httpRequestHeaders: $safeReqHeaders")
+                            
+                            val safeResHeaders = httpException.headerFields.mapValues { (k, v) ->
+                                if (k.equals("Set-Cookie", true)) listOf("<redacted>") else v
+                            }
+                            Log.e(TAG, "response headers: $safeResHeaders")
+                        }
+                        Log.e(TAG, "=================================================")
+
                         // wait for reconnection
                         val isConnectionError = (error.cause?.cause is PlaybackException)
                                 && (error.cause?.cause as PlaybackException).errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
                         if (!isNetworkConnected.value || isConnectionError) {
                             waitOnNetworkError()
                             return
+                        }
+
+                        // Invalidate cache on HTTP 403 to force a fresh URL on next attempt
+                        val isHttpError = error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+                        val is403 = error.cause?.message?.contains("403") == true || error.message?.contains("403") == true
+                        if (isHttpError || is403) {
+                            Log.e(TAG, "DIAGNOSTIC: ExoPlayer encountered HTTP 403. Invalidating URL cache for current song.")
+                            val currentMediaId = player.currentMediaItem?.mediaId
+                            if (currentMediaId != null) {
+                                songUrlCache.remove(currentMediaId)
+                            }
+
+                            if (consecutivePlaybackErr <= MAX_CONSECUTIVE_ERR) {
+                                consecutivePlaybackErr++
+                                player.prepare()
+                                player.play()
+                                return
+                            }
                         }
 
                         if (dataStore.get(SkipOnErrorKey, false)) {
@@ -796,7 +853,6 @@ class MusicService : MediaLibraryService(),
     }
 
     private fun createDataSourceFactory(): DataSource.Factory {
-        val songUrlCache = HashMap<String, Triple<String, Long, String>>()
         return ResolvingDataSource.Factory(createCacheDataSource()) { dataSpec ->
             val mediaId = dataSpec.key ?: error("No media id")
             Log.d(TAG, "PLAYING: song id = $mediaId")
@@ -837,18 +893,27 @@ class MusicService : MediaLibraryService(),
             songUrlCache[mediaId]?.takeIf { it.second > System.currentTimeMillis() }?.let {
                 Log.d(TAG, "PLAYING: remote song (temp cache), position=${dataSpec.position}, urlExpiry=${(it.second - System.currentTimeMillis()) / 1000}s remaining")
                 scope.launch(Dispatchers.IO) { recoverSong(mediaId) }
+                val extraHeaders = mutableMapOf("User-Agent" to it.third)
+                YouTube.visitorData?.let { visitorData ->
+                    extraHeaders["X-Goog-Visitor-Id"] = visitorData
+                }
+                if (dataSpec.position == 0L && dataSpec.length == androidx.media3.common.C.LENGTH_UNSET.toLong()) {
+                    extraHeaders["Range"] = "bytes=0-"
+                }
                 return@Factory dataSpec.withUri(it.first.toUri())
-                    .withAdditionalHeaders(mapOf("User-Agent" to it.third))
+                    .withAdditionalHeaders(extraHeaders)
             }
 
-            Log.d(TAG, "PLAYING: remote song (online fetch)")
+            Log.d(TAG, "PLAYING: remote song (online fetch using Resolver)")
 
-            val playbackData = runBlocking(Dispatchers.IO) {
-                YTPlayerUtils.playerResponseForPlayback(
-                    mediaId,
-                    audioQuality = audioQuality,
-                    connectivityManager = connectivityManager,
-                )
+            val playbackSource = runCatching {
+                runBlocking(Dispatchers.IO) {
+                    com.rana.bimo.playback.resolver.NativeInnertubeResolver().resolve(
+                        mediaId,
+                        audioQuality = audioQuality,
+                        connectivityManager = connectivityManager
+                    )
+                }
             }.getOrElse { throwable ->
                 when (throwable) {
                     is PlaybackException -> throw throwable
@@ -876,36 +941,39 @@ class MusicService : MediaLibraryService(),
                     )
                 }
             }
-            val format = playbackData.format
-
-            database.query {
-                upsert(
-                    FormatEntity(
-                        id = mediaId,
-                        itag = format.itag,
-                        mimeType = format.mimeType.split(";")[0],
-                        codecs = format.mimeType.split("codecs=")[1].removeSurrounding("\""),
-                        bitrate = format.bitrate,
-                        sampleRate = format.audioSampleRate,
-                        contentLength = format.contentLength!!,
-                        loudnessDb = playbackData.audioConfig?.loudnessDb,
-                        playbackTrackingUrl = playbackData.playbackTracking?.videostatsPlaybackUrl?.baseUrl
+            
+            val playbackData = playbackSource.originalPlaybackData
+            if (playbackData != null) {
+                val format = playbackData.format
+                database.query {
+                    upsert(
+                        FormatEntity(
+                            id = mediaId,
+                            itag = format.itag,
+                            mimeType = format.mimeType.split(";")[0],
+                            codecs = format.mimeType.split("codecs=")[1].removeSurrounding("\""),
+                            bitrate = format.bitrate,
+                            sampleRate = format.audioSampleRate,
+                            contentLength = format.contentLength!!,
+                            loudnessDb = playbackData.audioConfig?.loudnessDb,
+                            playbackTrackingUrl = playbackData.playbackTracking?.videostatsPlaybackUrl?.baseUrl
+                        )
                     )
-                )
+                }
+                scope.launch(Dispatchers.IO) { recoverSong(mediaId, playbackData) }
+            } else {
+                scope.launch(Dispatchers.IO) { recoverSong(mediaId) }
             }
-            scope.launch(Dispatchers.IO) { recoverSong(mediaId, playbackData) }
 
-            val streamUrl = playbackData.streamUrl
+            val streamUrl = playbackSource.url
 
             songUrlCache[mediaId] = Triple(
                 streamUrl,
-                System.currentTimeMillis() + (playbackData.streamExpiresInSeconds * 1000L),
-                playbackData.streamUserAgent,
+                playbackSource.expiresAt,
+                playbackSource.headers["User-Agent"] ?: "none",
             )
-            // Keep the range contract embedded in the YouTube URL. Forcing fixed 512 KiB
-            // subranges makes ANDROID_VR CDN URLs reject the second request with HTTP 403.
-            dataSpec.withUri(streamUrl.toUri())
-                .withAdditionalHeaders(mapOf("User-Agent" to playbackData.streamUserAgent))
+            
+            return@Factory playbackSource.toDataSpec(dataSpec)
         }
     }
 

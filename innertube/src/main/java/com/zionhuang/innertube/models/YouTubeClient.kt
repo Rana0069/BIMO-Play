@@ -8,7 +8,10 @@ data class YouTubeClient(
     val clientVersion: String,
     val clientId: String,
     val userAgent: String,
+    val osName: String? = null,
     val osVersion: String? = null,
+    val deviceMake: String? = null,
+    val deviceModel: String? = null,
     val loginSupported: Boolean = false,
     val loginRequired: Boolean = false,
     val useSignatureTimestamp: Boolean = false,
@@ -21,7 +24,10 @@ data class YouTubeClient(
         client = Context.Client(
             clientName = clientName,
             clientVersion = clientVersion,
+            osName = osName,
             osVersion = osVersion,
+            deviceMake = deviceMake,
+            deviceModel = deviceModel,
             gl = locale.gl,
             hl = locale.hl,
             visitorData = visitorData
@@ -46,6 +52,8 @@ data class YouTubeClient(
             clientVersion = "2.20250312.04.00",
             clientId = "1",
             userAgent = USER_AGENT_WEB,
+            useSignatureTimestamp = true,
+            useWebPoTokens = true,
         )
 
         val WEB_REMIX = YouTubeClient(
@@ -53,6 +61,8 @@ data class YouTubeClient(
             clientVersion = "1.20250310.01.00",
             clientId = "67",
             userAgent = USER_AGENT_WEB,
+            osName = "Windows",
+            osVersion = "10.0",
             loginSupported = true,
             useSignatureTimestamp = true,
             useWebPoTokens = true,
@@ -66,6 +76,7 @@ data class YouTubeClient(
             loginSupported = true,
             loginRequired = true,
             useSignatureTimestamp = true,
+            useWebPoTokens = true,
         )
 
         val TVHTML5_SIMPLY_EMBEDDED_PLAYER = YouTubeClient(
@@ -84,7 +95,10 @@ data class YouTubeClient(
             clientVersion = "20.10.4",
             clientId = "5",
             userAgent = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
+            osName = "iOS",
             osVersion = "18.3.2.22D82",
+            deviceMake = "Apple",
+            deviceModel = "iPhone16,2",
         )
 
         val ANDROID = YouTubeClient(
@@ -92,6 +106,8 @@ data class YouTubeClient(
             clientVersion = "20.10.38",
             clientId = "3",
             userAgent = "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
+            osName = "Android",
+            osVersion = "11",
             loginSupported = true,
             useSignatureTimestamp = true
         )
@@ -116,8 +132,21 @@ data class YouTubeClient(
             clientVersion = "1.61.48",
             clientId = "28",
             userAgent = "com.google.android.apps.youtube.vr.oculus/1.61.48 (Linux; U; Android 12; en_US; Oculus Quest 3; Build/SQ3A.220605.009.A1; Cronet/132.0.6808.3)",
+            osName = "Android",
+            osVersion = "12",
             loginSupported = false,
             useSignatureTimestamp = false
+        )
+        val VISIONOS = YouTubeClient(
+            clientName = "VISIONOS",
+            clientVersion = "1.47.1", // standard yt-dlp version
+            clientId = "113", // standard yt-dlp client id
+            userAgent = "com.google.ios.youtube/1.47.1 (Vision1,1; U; CPU xrOS 1_0 like Mac OS X;)",
+            osName = "xrOS",
+            osVersion = "1.0",
+            deviceMake = "Apple",
+            deviceModel = "Vision1,1",
+            useSignatureTimestamp = true
         )
     }
 }

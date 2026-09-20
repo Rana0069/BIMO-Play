@@ -103,5 +103,9 @@ lint/tmp/
 
 # misc
 .DS_Store
+*.webm
+yt-dlp.exe
+log.txt
+baseline.png
 
 /ffMetadataEx

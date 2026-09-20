@@ -36,6 +36,7 @@ class OnlineSearchViewModel @Inject constructor(
                             }
                             .onFailure {
                                 reportException(it)
+                                summaryPage = SearchSummaryPage(emptyList())
                             }
                     }
                 } else {
@@ -46,6 +47,7 @@ class OnlineSearchViewModel @Inject constructor(
                             }
                             .onFailure {
                                 reportException(it)
+                                viewStateMap[filter.value] = ItemsPage(emptyList(), null)
                             }
                     }
                 }

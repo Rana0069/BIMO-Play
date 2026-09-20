@@ -21,8 +21,9 @@ import com.rana.bimo.utils.potoken.PoTokenResult
 import com.zionhuang.innertube.NewPipeUtils
 import com.zionhuang.innertube.YouTube
 import com.zionhuang.innertube.models.YouTubeClient
-import com.zionhuang.innertube.models.YouTubeClient.Companion.IOS
 import com.zionhuang.innertube.models.YouTubeClient.Companion.TVHTML5_SIMPLY_EMBEDDED_PLAYER
+import com.zionhuang.innertube.models.YouTubeClient.Companion.WEB
+import com.zionhuang.innertube.models.YouTubeClient.Companion.WEB_CREATOR
 import com.zionhuang.innertube.models.YouTubeClient.Companion.WEB_REMIX
 import com.zionhuang.innertube.models.response.PlayerResponse
 import okhttp3.OkHttpClient
@@ -50,11 +51,20 @@ object YTPlayerUtils {
 
     /**
      * Clients used for fallback streams in case the streams of the main client do not work.
+     * Ordered by reliability: auth-free mobile clients first, then web clients.
+     * - IOS: reliable, no PoToken needed, no login required
+     * - ANDROID: reliable, no PoToken needed, loginSupported but not required
+     * - ANDROID_VR_NO_AUTH: no auth at all, historically very reliable
+     * - WEB: needs PoToken but no login required
+     * - WEB_CREATOR/TVHTML5: need login, will be skipped if not logged in
      */
     private val STREAM_FALLBACK_CLIENTS: Array<YouTubeClient> = arrayOf(
+        YouTubeClient.IOS,
+        YouTubeClient.ANDROID,
         YouTubeClient.ANDROID_VR_NO_AUTH,
+        WEB,
+        WEB_CREATOR,
         TVHTML5_SIMPLY_EMBEDDED_PLAYER,
-        IOS,
     )
 
     data class PlaybackData(
@@ -119,28 +129,32 @@ object YTPlayerUtils {
         var streamUserAgent: String? = null
         var streamExpiresInSeconds: Int? = null
 
+        // Tracks the best result we found so far (even if validation failed).
+        // Used as a last resort if all remaining clients are skipped or also fail.
+        var bestFallbackFormat: PlayerResponse.StreamingData.Format? = null
+        var bestFallbackUrl: String? = null
+        var bestFallbackUserAgent: String? = null
+        var bestFallbackExpiresIn: Int? = null
+        var bestFallbackPlayerResponse: PlayerResponse? = null
+
         var streamPlayerResponse: PlayerResponse? = null
         for (clientIndex in (-1 until STREAM_FALLBACK_CLIENTS.size)) {
-            // reset for each client
-            format = null
-            streamUrl = null
-            streamUserAgent = null
-            streamExpiresInSeconds = null
-
             // decide which client to use for streams and load its player response
             val client: YouTubeClient
             if (clientIndex == -1) {
-                Log.d(TAG, "Trying client: ${MAIN_CLIENT.clientName}")
+                Log.d(TAG, "DIAGNOSTIC: Trying MAIN_CLIENT: ${MAIN_CLIENT.clientName} (v${MAIN_CLIENT.clientVersion})")
                 // try with streams from main client first
                 client = MAIN_CLIENT
                 streamPlayerResponse = mainPlayerResponse
             } else {
-                Log.d(TAG, "Trying fallback client: ${STREAM_FALLBACK_CLIENTS[clientIndex].clientName}")
+                val fallbackClient = STREAM_FALLBACK_CLIENTS[clientIndex]
+                Log.d(TAG, "DIAGNOSTIC: Trying FALLBACK_CLIENT: ${fallbackClient.clientName} (v${fallbackClient.clientVersion})")
                 // after main client use fallback clients
-                client = STREAM_FALLBACK_CLIENTS[clientIndex]
+                client = fallbackClient
 
                 if (client.loginRequired && !isLoggedIn) {
                     // skip client if it requires login but user is not logged in
+                    Log.d(TAG, "DIAGNOSTIC: [${client.clientName}] Skipping (loginRequired, not logged in)")
                     continue
                 }
 
@@ -149,13 +163,18 @@ object YTPlayerUtils {
                         .getOrNull()
             }
 
-            Log.d(TAG, "[$videoId] stream client: ${client.clientName}, " +
-                    "playabilityStatus: ${streamPlayerResponse?.playabilityStatus?.let {
-                        it.status + (it.reason?.let { " - $it" } ?: "")
-                    }}")
+            // reset per-client stream fields
+            format = null
+            streamUrl = null
+            streamUserAgent = null
+            streamExpiresInSeconds = null
+
+            Log.d(TAG, "DIAGNOSTIC: [$videoId] client: ${client.clientName} -> playabilityStatus: ${streamPlayerResponse?.playabilityStatus?.status}, reason: ${streamPlayerResponse?.playabilityStatus?.reason}")
 
             // process current client response
             if (streamPlayerResponse?.playabilityStatus?.status == "OK") {
+                val audioFormats = streamPlayerResponse.streamingData?.adaptiveFormats?.filter { it.isAudio }
+                Log.d(TAG, "DIAGNOSTIC: [${client.clientName}] Found ${audioFormats?.size ?: 0} audio formats")
                 format =
                     findFormat(
                         streamPlayerResponse,
@@ -167,22 +186,47 @@ object YTPlayerUtils {
                 streamExpiresInSeconds =
                     streamPlayerResponse.streamingData?.expiresInSeconds ?: continue
 
+                Log.d(TAG, "DIAGNOSTIC: [${client.clientName}] Selected format: itag=${format.itag}, mimeType=${format.mimeType}, bitrate=${format.bitrate}")
+                Log.d(TAG, "DIAGNOSTIC: [${client.clientName}] Stream URL host: ${runCatching { Uri.parse(streamUrl).host }.getOrDefault("unknown")}")
+
                 if (client.useWebPoTokens && webStreamingPot != null) {
                     streamUrl += "&pot=$webStreamingPot";
                 }
 
+                // Save as best fallback regardless of validation outcome
+                if (bestFallbackUrl == null) {
+                    bestFallbackFormat = format
+                    bestFallbackUrl = streamUrl
+                    bestFallbackUserAgent = streamUserAgent
+                    bestFallbackExpiresIn = streamExpiresInSeconds
+                    bestFallbackPlayerResponse = streamPlayerResponse
+                }
+
                 if (clientIndex == STREAM_FALLBACK_CLIENTS.size - 1) {
                     /** skip [validateStatus] for last client */
+                    Log.d(TAG, "DIAGNOSTIC: [${client.clientName}] Last fallback client, skipping validation")
                     break
                 }
+                
+                Log.d(TAG, "DIAGNOSTIC: [${client.clientName}] Validating stream URL...")
                 if (validateStatus(streamUrl, client.userAgent)) {
                     // working stream found
-                    Log.i(TAG, "[$videoId] [${client.clientName}] found working stream")
+                    Log.i(TAG, "DIAGNOSTIC: [$videoId] [${client.clientName}] found working stream")
                     break
                 } else {
-                    Log.w(TAG, "[$videoId] [${client.clientName}] got bad http status code")
+                    Log.w(TAG, "DIAGNOSTIC: [$videoId] [${client.clientName}] got bad http status code, trying next client")
                 }
             }
+        }
+
+        // If the loop ended without a validated stream but we have a best-effort fallback, use it
+        if (streamUrl == null && bestFallbackUrl != null) {
+            Log.w(TAG, "[$videoId] No validated stream found; using best-effort fallback (may 403)")
+            format = bestFallbackFormat
+            streamUrl = bestFallbackUrl
+            streamUserAgent = bestFallbackUserAgent
+            streamExpiresInSeconds = bestFallbackExpiresIn
+            streamPlayerResponse = bestFallbackPlayerResponse
         }
 
         if (streamPlayerResponse == null) {
@@ -250,20 +294,50 @@ object YTPlayerUtils {
 
     /**
      * Checks if the stream url returns a successful status.
-     * If this returns true the url is likely to work.
-     * If this returns false the url might cause an error during playback.
+     * Performs a two-step validation (bytes=0-1, then bytes=2-3) to ensure
+     * the stream is fully authorized for subsequent chunks (not just the initial HEAD-like check).
      */
     private fun validateStatus(url: String, userAgent: String): Boolean {
         try {
-            val requestBuilder = okhttp3.Request.Builder()
-                .get()
-                .url(url)
-                .header("User-Agent", userAgent)
-                .header("Range", "bytes=0-0")
-            val response = httpClient.newCall(requestBuilder.build()).execute()
-            return response.isSuccessful
+            val reqBuilder = { range: String ->
+                okhttp3.Request.Builder()
+                    .get()
+                    .url(url)
+                    .header("User-Agent", userAgent)
+                    .header("Range", range)
+                    .apply {
+                        YouTube.visitorData?.let { visitorData ->
+                            header("X-Goog-Visitor-Id", visitorData)
+                        }
+                    }
+                    .build()
+            }
+            
+            // First validation chunk - check initial access
+            val res1 = httpClient.newCall(reqBuilder("bytes=0-1")).execute()
+            val code1 = res1.code
+            res1.body?.close()
+            
+            if (!res1.isSuccessful) {
+                Log.w(TAG, "validateStatus: Chunk 1 failed with HTTP $code1")
+                return false
+            }
+            
+            // Second validation chunk - simulate ExoPlayer's sequential chunk fetch
+            // Some CDNs authenticate only the first byte range and reject subsequent ones
+            val res2 = httpClient.newCall(reqBuilder("bytes=2-3")).execute()
+            val code2 = res2.code
+            res2.body?.close()
+            
+            if (!res2.isSuccessful) {
+                Log.e(TAG, "validateStatus: CDN AUTHORIZATION FAILED! Chunk 1=$code1 but Chunk 2=$code2")
+                return false
+            }
+
+            Log.d(TAG, "validateStatus: Stream validated OK ($code1 / $code2)")
+            return true
         } catch (e: Exception) {
-            reportException(e)
+            Log.e(TAG, "validateStatus: Exception during validation", e)
         }
         return false
     }
